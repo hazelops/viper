@@ -205,6 +205,7 @@ type Viper struct {
 	automaticEnvApplied bool
 	envKeyReplacer      StringReplacer
 	allowEmptyEnv       bool
+	allowEmptyMap       bool
 
 	config         map[string]interface{}
 	override       map[string]interface{}
@@ -524,6 +525,15 @@ func (v *Viper) mergeWithEnvPrefix(in string) string {
 	}
 
 	return strings.ToUpper(in)
+}
+
+// AllowEmptyMap tells Viper to consider set,
+// but empty maps as valid values instead of falling back.
+// For backward compatibility reasons this is false by default.
+func AllowEmptyMap(allowEmptyMap bool) { v.AllowEmptyMap(allowEmptyMap) }
+
+func (v *Viper) AllowEmptyMap(allowEmptyMap bool) {
+	v.allowEmptyMap = allowEmptyMap
 }
 
 // AllowEmptyEnv tells Viper to consider set,
@@ -1962,14 +1972,15 @@ func AllKeys() []string { return v.AllKeys() }
 
 func (v *Viper) AllKeys() []string {
 	m := map[string]bool{}
+	e := map[string]bool{}
 	// add all paths, by order of descending priority to ensure correct shadowing
-	m = v.flattenAndMergeMap(m, castMapStringToMapInterface(v.aliases), "")
-	m = v.flattenAndMergeMap(m, v.override, "")
+	m = v.flattenAndMergeMap(m, e, castMapStringToMapInterface(v.aliases), "")
+	m = v.flattenAndMergeMap(m, e, v.override, "")
 	m = v.mergeFlatMap(m, castMapFlagToMapInterface(v.pflags))
 	m = v.mergeFlatMap(m, castMapStringSliceToMapInterface(v.env))
-	m = v.flattenAndMergeMap(m, v.config, "")
-	m = v.flattenAndMergeMap(m, v.kvstore, "")
-	m = v.flattenAndMergeMap(m, v.defaults, "")
+	m = v.flattenAndMergeMap(m, e, v.config, "")
+	m = v.flattenAndMergeMap(m, e, v.kvstore, "")
+	m = v.flattenAndMergeMap(m, e, v.defaults, "")
 
 	// convert set of paths to list
 	a := make([]string, 0, len(m))
@@ -1986,7 +1997,10 @@ func (v *Viper) AllKeys() []string {
 //     it is skipped.
 //
 // The resulting set of paths is merged to the given shadow set at the same time.
-func (v *Viper) flattenAndMergeMap(shadow map[string]bool, m map[string]interface{}, prefix string) map[string]bool {
+func (v *Viper) flattenAndMergeMap(shadow map[string]bool, empty map[string]bool, m map[string]interface{}, prefix string) map[string]bool {
+	if len(m) == 0 && prefix != "" && v.allowEmptyMap {
+		empty[prefix] = true
+	}
 	if shadow != nil && prefix != "" && shadow[prefix] {
 		// prefix is shadowed => nothing more to flatten
 		return shadow
@@ -2011,9 +2025,17 @@ func (v *Viper) flattenAndMergeMap(shadow map[string]bool, m map[string]interfac
 			shadow[strings.ToLower(fullKey)] = true
 			continue
 		}
+
 		// recursively merge to shadow map
-		shadow = v.flattenAndMergeMap(shadow, m2, fullKey)
+		shadow = v.flattenAndMergeMap(shadow, empty, m2, fullKey)
 	}
+
+	for k := range empty {
+		if prefix != "" && strings.Contains(k, prefix) {
+			shadow[strings.ToLower(k)] = true
+		}
+	}
+
 	return shadow
 }
 
